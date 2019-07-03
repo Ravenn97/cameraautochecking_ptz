@@ -1,3 +1,7 @@
+from __future__ import division
+
+import math
+
 import numpy as np
 from cv2 import cv2
 from imutils import face_utils
@@ -19,11 +23,15 @@ from WeightedFramerateCounter import WeightedFramerateCounter
 	Uses CV facial recognition to control a pan/tilt/zoom camera
 	and keep a speaker centered and framed appropriately.
 '''
-
-# Tunable parameters
+#        if subject.isCentered \
+#                 and self.requestedZoomPos > 0 \
+#                 and self.requestedZoomPos < stage.trackingZoom:
+#             pysca.pan_tilt(1, 0, 5, 0, stage.trackingTiltAdjustment, relative=True, blocking=True)
+#             pysca.set_zoom(1, stage.trackingZoom, blocking=True)
+#             self.requestedZoomPos = stage.trackingZoom
+# # Tunable parameters
 
 g_debugMode = True
-g_testImage = None
 
 
 class Face():
@@ -34,18 +42,19 @@ class Face():
     recentlyVisible = False
     lastSeenTime = 0
     firstSeenTime = 0
-    hcenter = -1
+    xcenter = -1
+    ycenter = -1
 
     def __init__(self, cfg):
         self._recentThresholdSeconds = cfg["recentThresholdSeconds"]
 
-    def found(self, hcenter):
+    def found(self, xcenter, ycenter):
         now = time.time()
         if not self.visible:
             self.firstSeenTime = now
         self.lastSeenTime = now
-
-        self.hcenter = hcenter
+        self.xcenter = xcenter
+        self.ycenter = ycenter
         self.visible = True
         self.recentlyVisible = True
         self.didDisappear = False
@@ -74,15 +83,19 @@ class Face():
 
 
 class Subject():
-    hcenter = -1
-    offset = 0
+    xcenter = -1
+    offsetX = 0
+    offsetY = 0
     offsetHistory = []
     isPresent = False
     isCentered = True
     isFarLeft = False
     isFarRight = False
+    isFarUp = False
+    isFarDown = False
+    debug_mode = False
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, debug_mode=False):
         self.centeredPercentVariance = cfg["centeredPercentVariance"]
         self.offCenterPercentVariance = cfg["offCenterPercentVariance"]
 
@@ -101,86 +114,86 @@ class Subject():
         history = iter(self.offsetHistory)
         prior = history.next()
         current = history.next()
-        #type prior and current is tuple
         try:
             while True:
-                deltas.append(abs(current[0] - prior[0]) + abs(current[1] - prior[1]))
+                deltas.append(abs(current - prior))
                 prior = current
                 current = history.next()
         except StopIteration:
             pass
         avgDelta = float(sum(deltas) / len(deltas))
-        return True if avgDelta > 18 else False
+        return True if avgDelta > 9 else False
 
     def evaluate(self, face, scene):
         if not face.visible:
             if not face.recentlyVisible:
                 # If we haven't seen a face in a while, reset
-                self.hcenter = -1
-                self.offset = 0
+                self.xcenter = -1
+                self.ycenter = -1
+                self.offsetX = 0
+                self.offsetY = 0
                 self.isPresent = False
                 self.isCentered = True
                 self.isFarLeft = False
                 self.isFarRight = False
-             #################################################
-                self.isFarDown = False
                 self.isFarUp = False
-            ################################################
+                self.isFarDown = False
+
             # If we still have a recent subject location, keep it
             self.isPresent = True
             return
 
-        # We have a subject and can characterize location in the frame 
+        # We have a subject and can characterize location in the frame
         self.isPresent = True
-        self.hcenter = face.hcenter
-        frameCenter = scene.imageWidth / 2.0
-        ###################################################
-        self.hcenter2 = face.hcenter2
-        frameCenter2 = scene.imageHeight / 2.0
+        self.xcenter = face.xcenter
+        self.ycenter = face.ycenter
+        frameCenterX = scene.imageWidth / 2.0
+        frameCenterY = scene.imageHeight / 2.0
 
-        self.offset2 = frameCenter2 - self.hcenter2
+        # print scene.imageWidth
 
+        self.offsetX = abs(frameCenterX - self.xcenter)
+        self.offsetY = abs(frameCenterY - self.ycenter)
 
-        ##################################################
-        self.offset = frameCenter - self.hcenter
-        percentVariance = (self.offset * 2.0 / frameCenter) * 100
-        percentVariance2 = (self.offset2 * 2.0 / frameCenter2) * 100
+        percentVarianceX = (self.offsetX * 2.0 / frameCenterX) * 100
+        self.manageOffsetHistory(percentVarianceX)
 
-        sum_of_Variance = (percentVariance, percentVariance2)
-        ######################################
-        self.manageOffsetHistory(sum_of_Variance)
-
-
-        print "hcenter: {0:d}; offset: {1:f}; variance: {2:f}; frameCenter:{3:f}".format(self.hcenter,self.offset, percentVariance, frameCenter)
-        if abs(percentVariance) <= self.centeredPercentVariance:
+        distance = math.sqrt(abs(self.offsetX) ** 2 + abs(self.offsetY) ** 2)
+        print "Distance: {}".format(distance)
+        R = scene.imageHeight * 0.15
+        if int(distance) <= R:
             self.isCentered = True
         else:
-            self.isCentered = False
-        if abs(percentVariance) > self.offCenterPercentVariance:
-            if self.hcenter < frameCenter:
-                self.isFarLeft = True
-            else:
-                self.isFarRight = True
-        else:
-            self.isFarLeft = False
-            self.isFarRight = False
-        return
+            print "Evalute func"
+            MARGIN_Y = 0.05 * scene.imageHeight
 
-    # def text(self):
-    #     msg = "Subj: "
-    #     msg += "! " if self.isVolatile() else "- "
-    #     if not self.isPresent:
-    #         msg += "..."
-    #         return msg
-    #     if not self.isCentered and not self.isFarLeft and not self.isFarRight:
-    #         msg += "oOo"
-    #     if self.isCentered:
-    #         msg += ".|."
-    #     if self.isFarLeft:
-    #         msg += "<.."
-    #     if self.isFarRight:
-    #         msg += "..>"
-    #     return msg
+            if self.ycenter > frameCenterY + MARGIN_Y:
+                self.isFarUp = False
+                self.isFarDown = True
+            elif self.ycenter < frameCenterY - MARGIN_Y:
+                self.isFarUp = True
+                self.isFarDown = False
+            else:
+                self.isFarUp = False
+                self.isFarDown = False
+
+            if self.xcenter > frameCenterX:
+                self.isFarRight = True
+                self.isFarLeft = False
+            elif self.xcenter < frameCenterX:
+                self.isFarLeft = True
+                self.isFarRight = False
+            self.isCentered = False
+        if self.debug_mode:
+            print "****************"
+            print "Center", self.isCentered
+            print self.isFarLeft
+            print self.isFarRight
+            print self.isFarUp
+            print self.isFarDown
+            print "****************"
+
+        return
 
 
 class Camera():
@@ -204,28 +217,28 @@ class Camera():
         self.height = int(self.cvcamera.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.cvreader = CameraReaderAsync.CameraReaderAsync(self.cvcamera)
 
-    def lostPTZfeed(self):
-        return True
-        # return False if self._badPTZcount < 5 else True
+    # def lostPTZfeed(self):
+    #     return True
+    #     # return False if self._badPTZcount < 5 else True
+    #
+    # def updatePTZ(self):
+    #     self._badPTZcount += 1
+    #     return
 
-    def updatePTZ(self):
-        self._badPTZcount += 1
-        return
-
-        # nowPanPos, nowTiltPos = pysca.get_pan_tilt_position()
-        # nowZoomPos = pysca.get_zoom_position()
-        #
-        # if nowZoomPos < 0:
-        #     self._badPTZcount += 1
-        #     return
-        #
-        # self._badPTZcount = 0
-        # print "P: {0:d} T: {1:d} Z: {2:d}".format( \
-        #     nowPanPos, nowTiltPos, nowZoomPos)
-        #
-        # self.panPos = nowPanPos
-        # self.tiltPos = nowTiltPos
-        # self.zoomPos = nowZoomPos
+    # nowPanPos, nowTiltPos = pysca.get_pan_tilt_position()
+    # nowZoomPos = pysca.get_zoom_position()
+    #
+    # if nowZoomPos < 0:
+    #     self._badPTZcount += 1
+    #     return/home/tungdv/Desktop/pycambot/cambot3.py
+    #
+    # self._badPTZcount = 0
+    # print "P: {0:d} T: {1:d} Z: {2:d}".format( \
+    #     nowPanPos, nowTiltPos, nowZoomPos)
+    #
+    # self.panPos = nowPanPos
+    # self.tiltPos = nowTiltPos
+    # self.zoomPos = nowZoomPos
 
 
 class Stage():
@@ -247,6 +260,8 @@ class Scene():
     confidence = 0.01
     requestedZoomPos = -1
 
+    # REVERSE = True
+
     def __init__(self, cfg, camera, stage):
         self.imageWidth = cfg["imageWidth"]
         self.imageHeight = cfg["imageHeight"]
@@ -254,10 +269,10 @@ class Scene():
         self.returnHomeSpeed = cfg["returnHomeSpeed"]
         self.homePauseSeconds = cfg["homePauseSeconds"]
 
-        self.homePauseTimer = RealtimeInterval(cfg["homePauseSeconds"], False)
-        self.zoomTimer = RealtimeInterval(cfg["zoomMaxSecondsSafety"], False)
+        self.homePauseTimer = RealtimeInterval(cfg["homePauseSeconds"], True)
+        self.zoomTimer = RealtimeInterval(cfg["zoomMaxSecondsSafety"], True)
 
-    def goHome(self, camera, stage):
+    def goHome(self, stage):
         pysca.pan_tilt(1, 0, 0, blocking=True)
         pysca.pan_tilt(1, self.returnHomeSpeed, self.returnHomeSpeed, stage.homePan, stage.homeTilt, blocking=True)
         pysca.set_zoom(1, stage.homeZoom, blocking=True)
@@ -268,19 +283,19 @@ class Scene():
     def trackSubject(self, camera, stage, subject, face, faceCount):
         self.confidence = 100.0 / faceCount if faceCount else 0
         self.subjectVolatile = subject.isVolatile()
-
         # Should we stay in motion?
         if self.confidence < self.minConfidence \
                 or not face.recentlyVisible \
-                or self.subjectVolatile \
                 or subject.isCentered:
             # Stop all tracking motion
+            print "Stop tracking motion"
             pysca.pan_tilt(1, 0, 0, blocking=True)
+            return
 
         # Should we return to home position?
-        if not face.recentlyVisible \
-                and not self.atHome:
-            self.goHome(camera, stage)
+        if not face.recentlyVisible and not self.atHome:
+            print 'Go Home'
+            self.goHome(stage)
             return
 
         # Initiate no new tracking action unless face has been seen recently
@@ -288,21 +303,52 @@ class Scene():
             return
 
         # Adjust to tracking zoom and tilt (closer)
-        if subject.isCentered \
-                and not self.subjectVolatile \
-                and self.requestedZoomPos > 0 \
-                and self.requestedZoomPos < stage.trackingZoom:
-            pysca.pan_tilt(1, 0, 5, 0, stage.trackingTiltAdjustment, relative=True, blocking=True)
-            pysca.set_zoom(1, stage.trackingZoom, blocking=True)
-            self.requestedZoomPos = stage.trackingZoom
+        # if subject.isCentered \
+        #         and self.requestedZoomPos > 0 \
+        #         and self.requestedZoomPos < stage.trackingZoom:
+        #     pysca.pan_tilt(1, 0, 5, 0, stage.trackingTiltAdjustment, relative=True, blocking=True)
+        #     pysca.set_zoom(1, stage.trackingZoom, blocking=True)
+        #     self.requestedZoomPos = stage.trackingZoom
 
+        SPEED = 10
+        speed_x = SPEED
+        speed_y = SPEED
+        if subject.offsetX + subject.offsetY > 0:
+            speed_x = SPEED * (subject.offsetX / (subject.offsetX + subject.offsetY))
+            speed_y = SPEED * (subject.offsetY / (subject.offsetX + subject.offsetY))
+        speed_x = round(speed_x, 0)
+        speed_y = round(speed_y, 0)
+
+        # if self.REVERSE:
+        #     speed_x *= -1
+        #     speed_y *= -1
+
+        # print 'Speed_x is:\t{}\tSpeed_y is:\t{}'.format(speed_x, speed_y)
         if subject.isFarLeft:
-            pysca.pan_tilt(1, -2)
-            self.atHome = False
+            if subject.isFarUp:
+                print "Object left up"
+                pysca.pan_tilt(1, -speed_x, +speed_y)
+            elif subject.isFarDown:
+                print "Object left down"
+                pysca.pan_tilt(1, -speed_x, -speed_y)
+            else:
+                "Object left"
+                pysca.pan_tilt(1, -SPEED)
+            print 'Speed_x is:\t{}\tSpeed_y is:\t{}'.format(speed_x, speed_y)
         elif subject.isFarRight:
-            pysca.pan_tilt(1, 2)
-            self.atHome = False
-
+            if subject.isFarUp:
+                print "Object right up"
+                pysca.pan_tilt(1, speed_x, +speed_y)
+                pass
+            elif subject.isFarDown:
+                print "Object right down"
+                pysca.pan_tilt(1, speed_x, -speed_y)
+                pass
+            else:
+                print "Object right"
+                pysca.pan_tilt(1, SPEED)
+            print 'Speed_x is:\t{}\tSpeed_y is:\t{}'.format(speed_x, speed_y)
+        self.atHome = False
         return
 
 
@@ -322,10 +368,10 @@ def main(cfg):
     fpsDisplay = True
     fpsCounter = WeightedFramerateCounter()
     fpsInterval = RealtimeInterval(10.0, False)
-
+    scene.goHome(stage)
     # Loop on acquisition
     while 1:
-        camera.updatePTZ()
+        # camera.updatePTZ()
         raw = None
         raw = camera.cvreader.Read()
 
@@ -361,9 +407,13 @@ def main(cfg):
 
             # ~ printif("Found {0} faces!".format(len(faces)))
             if len(faces):
-                (x, __, w, __) = faces[0]
-                face.found(x + w / 2)
-                # (hcenter = x + w/2)
+                (x, y, w, h) = faces[0]
+
+                cv2.rectangle(raw, (x, y), (x + w, y + h), (255, 0, 0), 2)
+                # cv2.imshow('img', raw)
+
+                face.found(x + w / 2, y + h / 2)
+                # (xcenter = x + w/2)
             else:
                 face.lost()
             subject.evaluate(face, scene)
@@ -418,7 +468,6 @@ ap.add_argument("--release", dest="releaseMode", action="store_const", const=Tru
 args = vars(ap.parse_args())
 
 #
-
 
 g_debugMode = not args["releaseMode"]
 
