@@ -1,0 +1,33 @@
+{
+    "cambot":{
+        "debugMode": true,
+        "testImage": null
+    },
+    "face":{
+        "recentThresholdSeconds": 3
+    },
+    "subject":{
+        "centeredPercentVariance": 20,
+        "offCenterPercentVariance": 40
+    },
+    "camera":{
+        "socket": "/dev/ttyUSB0"
+    },
+    "stage":{
+        "homePan": 65521,
+        "homeTilt": 65505,
+        "homeZoom": 900,
+        "maxLeftPan": 64671,
+        "maxRightPan": 256,
+        "trackingZoom": 5000,
+        "trackingTiltAdjustment": 14
+    },
+    "scene":{
+        "imageWidth": 600,
+        "imageHeight": 450,
+        "minConfidence": 45,
+        "homePauseSeconds": 1,
+        "returnHomeSpeed": 18,
+        "zoomMaxSecondsSafety": 2
+    }
+}
